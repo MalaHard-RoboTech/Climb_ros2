@@ -7,7 +7,7 @@ here you can find all about ros2 for climb robot alpine
 If you want to control the Climb Robot using a **web-based GUI**, you can also download the **WebApp GUI**.  
 This interface is designed to work seamlessly with the ROS 2 system, offering an easy and intuitive way to operate the robot from a browser.
 
-👉 [**Click here to download the WebApp GUI**]([insert-your-link-here](https://github.com/RubenMalacarne/webapp_robot_gui))
+👉 [Click here to download the WebApp GUI](https://github.com/RubenMalacarne/webapp_robot_gui)
 
 ---
 
