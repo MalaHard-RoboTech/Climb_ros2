@@ -12,16 +12,12 @@ This node connects to an ESP32-based Arganello over USB and exposes ROS2 interfa
 
 Start the node for the **left (sx)** motor:
 ```bash
-ros2 run cl_arganello_interface arganello_node.py --ros-args \
-  -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 \
-  -p arganello_id:=sx -p loop_rate:=200.0
+ros2 run cl_arganello_interface arganello_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 -p arganello_id:=sx -p loop_rate:=200.0
 ```
 
 Start the node for the **right (dx)** motor:
 ```bash
-ros2 run cl_arganello_interface arganello_node.py --ros-args \
-  -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970046081-if00 \
-  -p arganello_id:=dx -p loop_rate:=200.0
+ros2 run cl_arganello_interface arganello_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970046081-if00 -p arganello_id:=dx -p loop_rate:=200.0
 ```
 
 ---
