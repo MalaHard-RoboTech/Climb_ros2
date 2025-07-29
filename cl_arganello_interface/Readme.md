@@ -78,12 +78,12 @@ ros2 service call /arganello/dx/set_torque_mode std_srvs/srv/Trigger
 ros2 service call /arganello/dx/set_velocity_mode std_srvs/srv/Trigger
 ros2 service call /arganello/dx/set_position_mode std_srvs/srv/Trigger
 ```
+
 ### Reset rope length reference
 ```bash
 ros2 service call /arganello/sx/set_initial_rope_position std_srvs/srv/Trigger
 ros2 service call /arganello/dx/set_initial_rope_position std_srvs/srv/Trigger
 ```
-
 ---
 
 ## 📶 Telemetry Topics

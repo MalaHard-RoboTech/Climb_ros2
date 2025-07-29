@@ -1,0 +1,22 @@
+std_msgs/Header header
+bool brake_status
+float32 vbus_voltage
+float32 motor_temperature
+float32 input_id
+float32 input_iq
+float32 input_position
+float32 input_velocity
+float32 input_torque
+float32 motor_torque
+float32 motor_pos
+float32 motor_vel
+float32 sync_roller_pos
+float32 sync_roller_vel
+int32 sync_roller_raw
+
+float32 rope_lenght
+float32 rope_velocity
+float32 rope_force
+float32 variable_gear_ratio
+float32 tau_friction
+float32 tau_stiction

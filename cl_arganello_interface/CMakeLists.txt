@@ -18,6 +18,7 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetControlMode.srv"
   "msg/ArganelloRawTelemetry.msg"
+  "msg/ArganelloEnhancedTelemetry.msg"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 
@@ -26,6 +27,7 @@ install(
   PROGRAMS
   cl_arganello_interface/dongle_node.py
   cl_arganello_interface/arganello_node.py
+  cl_arganello_interface/arganello_enhancer_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
