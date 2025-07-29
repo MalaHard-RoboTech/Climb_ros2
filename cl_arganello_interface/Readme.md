@@ -95,3 +95,4 @@ ros2 service call /arganello/dx/set_position_mode std_srvs/srv/Trigger
 - Telemetry is published at up to **200 Hz** from the ESP32.
 - All services are synchronous and return a success message.
 - Publish motor commands at **50 Hz** to not choke telemetry data
+
