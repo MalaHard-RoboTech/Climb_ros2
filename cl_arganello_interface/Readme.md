@@ -79,11 +79,28 @@ ros2 service call /arganello/dx/set_velocity_mode std_srvs/srv/Trigger
 ros2 service call /arganello/dx/set_position_mode std_srvs/srv/Trigger
 ```
 
+---
+
+### 📈 Enhanced Telemetry Calculations
+
+The `arganello_enhancer_node.py` enhances raw telemetry from the synchronous rollerand motor shaft to compute **derived metrics** such as rope length, velocity, and force.
+
+#### 🚀 Run the Enhancer Node
+
+```bash
+# For the left motor (sx)
+ros2 run cl_arganello_interface arganello_enhancer_node.py --ros-args -p arganello_id:=sx
+
+# For the right motor (dx)
+ros2 run cl_arganello_interface arganello_enhancer_node.py --ros-args -p arganello_id:=dx
+
+
 ### Reset rope length reference
 ```bash
 ros2 service call /arganello/sx/set_initial_rope_position std_srvs/srv/Trigger
 ros2 service call /arganello/dx/set_initial_rope_position std_srvs/srv/Trigger
 ```
+
 ---
 
 ## 📶 Telemetry Topics
