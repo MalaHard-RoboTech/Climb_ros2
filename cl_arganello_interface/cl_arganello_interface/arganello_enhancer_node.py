@@ -5,40 +5,36 @@ from std_msgs.msg import String
 from cl_arganello_interface.msg import ArganelloRawTelemetry, ArganelloEnhancedTelemetry
 from std_srvs.srv import Trigger
 import time
-
-# === Constants ===
-DRUM_DIAMETER = 0.05  # Diameter of sync roller (5 cm)
-DRUM_RADIUS = DRUM_DIAMETER / 2  # 0.025 m
-MOTOR_ROLLER_DIAMETER = 0.04  # Diameter of motor pulley (4 cm)
-MOTOR_ROLLER_RADIUS = MOTOR_ROLLER_DIAMETER / 2  # 0.02 m
-CPR = 2600  # Encoder counts per revolution
-
-# Circumference of the drum
-DRUM_CIRCUMFERENCE = 2 * 3.1415926 * DRUM_RADIUS  # ≈ 0.15708 m/rev
-
-# Radians per tick
-RAD_PER_TICK = 2 * 3.1415926 / CPR  # ≈ 0.00242 rad/tick
-
-# Arc distance per tick (rope length moved per encoder tick)
-ARC_PER_TICK = DRUM_RADIUS * RAD_PER_TICK  # ≈ 0.0000605 m/tick
-
-# Minimum mechanical gear ratio when rope is directly on the shaft (DRUM_RADIUS / MOTOR_ROLLER_RADIUS)
-MIN_GEAR_RATIO = DRUM_RADIUS / MOTOR_ROLLER_RADIUS  # 0.025 / 0.02 = 1.25
+import math
 
 
 class ArganelloEnhancerNode(Node):
     def __init__(self):
         super().__init__('arganello_enhancer_node')
 
-        # Parameters
+        # === Parameters ===
         self.declare_parameter("arganello_id", "dx")
-        self.id = self.get_parameter("arganello_id").get_parameter_value().string_value
+        self.declare_parameter("synchronous_roller_radius", 0.025)   # 5 cm
+        self.declare_parameter("cable_diameter", 0.004)              # 4 mm
+        self.declare_parameter("motor_pignon_radius", 0.02)          # 4 cm
+        self.declare_parameter("tau_friction_static", 0.2)           # Nm
+        self.declare_parameter("tau_stiction_static", 0.5)           # Nm
+        self.declare_parameter("stiction_threshold", 1.0)            # rad/s
 
-        # State
+        # === Get Parameters ===
+        self.id = self.get_parameter("arganello_id").get_parameter_value().string_value
+        self.r_sync = self.get_parameter("synchronous_roller_radius").value
+        self.r_cable = self.get_parameter("cable_diameter").value
+        self.r_motor = self.get_parameter("motor_pignon_radius").value
+        self.tau_friction_static = self.get_parameter("tau_friction_static").value
+        self.tau_stiction_static = self.get_parameter("tau_stiction_static").value
+        self.stiction_threshold = self.get_parameter("stiction_threshold").value
+
+        # === Internal State ===
         self.initial_sync_raw = 0
         self.last_sync_raw = 0
 
-        # Topics
+        # === ROS Interfaces ===
         ns = f"/arganello/{self.id}"
         self.sub = self.create_subscription(ArganelloRawTelemetry, f"{ns}/telemetry/raw", self.cb, 10)
         self.enhanced_pub = self.create_publisher(ArganelloEnhancedTelemetry, f"{ns}/telemetry/enhanced", 10)
@@ -55,21 +51,28 @@ class ArganelloEnhancerNode(Node):
     def cb(self, msg: ArganelloRawTelemetry):
         self.last_sync_raw = msg.sync_roller_raw
 
-        # === Derived Calculations ===
+        # Rope length (in meters)
+        rope_length = (msg.sync_roller_pos - self.initial_sync_raw) * self.r_sync
 
-        # Distance rope has traveled since zeroing (ticks * arc per tick)
-        tick_diff = msg.sync_roller_raw - self.initial_sync_raw
-        rope_length = tick_diff * ARC_PER_TICK  # meters
+        # Rope velocity
+        rope_velocity = msg.sync_roller_vel * (self.r_sync + self.r_cable / 2)
 
-        # Rope velocity = omega * radius
-        rope_velocity = msg.sync_roller_vel * DRUM_RADIUS  # m/s
+        # Variable gear ratio (prefer velocity ratio if moving)
+        if abs(msg.motor_vel) > 1e-3:
+            variable_gear_ratio = msg.sync_roller_vel / msg.motor_vel
+        else:
+            variable_gear_ratio = self.r_sync / self.r_motor
 
-        # Variable gear ratio = motor_vel / sync_roller_vel (min 1.25)
-        raw_ratio = msg.motor_vel / (msg.sync_roller_vel + 1e-6)  # prevent div by 0
-        variable_gear_ratio = max(raw_ratio, MIN_GEAR_RATIO)
-
-        # Force on the rope = torque * gear ratio
+        # Rope force
         rope_force = msg.motor_torque * variable_gear_ratio
+
+        # Friction/Stiction Torque Estimation
+        if abs(msg.motor_vel) < self.stiction_threshold:
+            tau_stiction = self.tau_stiction_static
+            tau_friction = 0.0
+        else:
+            tau_friction = self.tau_friction_static
+            tau_stiction = 0.0
 
         # === Enhanced Message ===
         enhanced = ArganelloEnhancedTelemetry()
@@ -93,17 +96,18 @@ class ArganelloEnhancerNode(Node):
         enhanced.rope_velocity = float(rope_velocity)
         enhanced.rope_force = float(rope_force)
         enhanced.variable_gear_ratio = float(variable_gear_ratio)
-        enhanced.tau_friction = 1.0
-        enhanced.tau_stiction = 1.0
+        enhanced.tau_friction = float(tau_friction)
+        enhanced.tau_stiction = float(tau_stiction)
 
         self.enhanced_pub.publish(enhanced)
 
-        # CSV publishing
+        # === CSV Output ===
         csv_line = f"{int(time.time())},{int(msg.brake_status)},{msg.vbus_voltage:.3f},{msg.motor_temperature:.3f}," \
                    f"{msg.input_id:.3f},{msg.input_iq:.3f},{msg.input_position:.3f},{msg.input_velocity:.3f}," \
                    f"{msg.input_torque:.3f},{msg.motor_torque:.3f},{msg.motor_pos:.3f},{msg.motor_vel:.3f}," \
                    f"{msg.sync_roller_pos:.3f},{msg.sync_roller_vel:.3f},{msg.sync_roller_raw}," \
-                   f"{rope_length:.6f},{rope_velocity:.6f},{rope_force:.6f},{variable_gear_ratio:.6f},1.0,1.0"
+                   f"{rope_length:.6f},{rope_velocity:.6f},{rope_force:.6f},{variable_gear_ratio:.6f}," \
+                   f"{tau_friction:.3f},{tau_stiction:.3f}"
 
         self.csv_pub.publish(String(data=csv_line))
 
