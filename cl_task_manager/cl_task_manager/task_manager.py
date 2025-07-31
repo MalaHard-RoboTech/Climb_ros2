@@ -210,6 +210,40 @@ class TaskManager(Node):
         self.get_logger().info(f'Published velocity: {value}')
 
     # TASK COMPUTATION --------------------------------
+    def wait_for_sync_roller_stabilization(self, timeout=30.0, stable_duration=2.0, tolerance=5):
+        start_time = time.time()
+        stable_start_time = None
+        last_value = None
+        
+        while time.time() - start_time < timeout:
+            if self.latest_telemetry is None:
+                time.sleep(0.1)
+                continue
+                
+            current_value = self.latest_telemetry.sync_roller_raw
+            current_time = time.time()
+            
+            if last_value is None:
+                last_value = current_value
+                stable_start_time = current_time
+            else:
+                # Check if value is within tolerance range
+                if abs(current_value - last_value) <= tolerance:
+                    # Value is stable, check if we've been stable long enough
+                    if stable_start_time is None:
+                        stable_start_time = current_time
+                    elif current_time - stable_start_time >= stable_duration:
+                        self.get_logger().info(f'sync_roller_raw stabilized at {current_value} for {stable_duration} seconds')
+                        return True
+                else:
+                    # Value changed beyond tolerance, reset stable timer
+                    stable_start_time = None
+                    last_value = current_value
+                    self.get_logger().info(f'sync_roller_raw changed to {current_value}, resetting stability timer')
+            time.sleep(0.1)
+        self.get_logger().error(f'Timeout waiting for sync_roller_raw stabilization after {timeout} seconds')
+        return False
+    
     def initialization_step(self):
         """
         Initialization sequence:
@@ -246,9 +280,15 @@ class TaskManager(Node):
         self.get_logger().info('Step 3: Setting target velocity to 0.5...')
         self.publisher_command('velocity_mode',0.5)
         
-        # Step 4: Wait 2 seconds
-        self.get_logger().info('Step 4: Waiting 2 seconds...')
-        time.sleep(2.0)
+        
+        # # Step 4: Wait 2 seconds
+        # self.get_logger().info('Step 4: Waiting 2 seconds...')
+        # time.sleep(2.0)
+        # Step 4: Wait for sync_roller_raw to stabilize
+        self.get_logger().info('Step 4: Waiting for sync_roller_raw to stabilize...')
+        if not self.wait_for_sync_roller_stabilization():
+            self.get_logger().error('Failed to achieve sync_roller_raw stabilization')
+            return False
         
         # Step 5: Set brake to false (again)
         self.get_logger().info('Step 5: Disengaging brake again...')
@@ -281,4 +321,4 @@ if __name__ == '__main__':
     main()
         
 #to tested: 
-#ros2 action send_goal /task_manager_server_action cl_arganello_interface/action/Task "{task_number: 0}" -f
+#ros2 action send_goal /task_manager_server_action cl_task_manager/action/Task "{task_number: 3}" -f
