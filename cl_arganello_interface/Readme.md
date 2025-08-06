@@ -108,6 +108,8 @@ ros2 service call /arganello/dx/set_initial_rope_position std_srvs/srv/Trigger
 - `/arganello/<id>/telemetry/raw` — structured ROS message (ArganelloRawTelemetry)
 - `/arganello/<id>/telemetry/raw/csv` — raw CSV string with UNIX timestamp prepended
 
+## add enhanced version
+
 ---
 
 ## 🔹 Notes
@@ -117,4 +119,5 @@ ros2 service call /arganello/dx/set_initial_rope_position std_srvs/srv/Trigger
 - Telemetry is published at up to **200 Hz** from the ESP32.
 - All services are synchronous and return a success message.
 - Publish motor commands at **50 Hz** to not choke telemetry data
+
 

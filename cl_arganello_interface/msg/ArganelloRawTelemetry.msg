@@ -1,9 +1,8 @@
 std_msgs/Header header
 bool brake_status
 float32 vbus_voltage
+float32 ibus
 float32 motor_temperature
-float32 input_id
-float32 input_iq
 float32 input_position
 float32 input_velocity
 float32 input_torque
