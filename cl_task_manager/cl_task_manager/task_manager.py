@@ -12,7 +12,7 @@ from cl_arganello_interface.msg import ArganelloEnhancedTelemetry
 from std_srvs.srv import SetBool, Trigger
 from std_msgs.msg import Float32  
 
-from tasks import task_0  
+# from tasks import task_0  
 
 class TaskManager(Node):
     def __init__(self):
@@ -71,7 +71,7 @@ class TaskManager(Node):
         if goal_handle.request.task_number == 0:
             self.get_logger().info('Task 0 started')
             #example
-            task_0(feedback_msg, goal_handle)    
+            # task_0(feedback_msg, goal_handle)    
 
         # TASK 1
         elif goal_handle.request.task_number == 1:
