@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
+  
+import time
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionServer
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.executors import ExternalShutdownException
 from rclpy.executors import MultiThreadedExecutor
 
 from cl_task_manager.action import Task
 from cl_arganello_interface.msg import ArganelloEnhancedTelemetry
-from std_srvs.srv import SetBool, Trigger  
-import time
+from std_srvs.srv import SetBool, Trigger
 from std_msgs.msg import Float32  
 
 from tasks import task_0  
@@ -39,7 +41,8 @@ class TaskManager(Node):
         self.action_server = ActionServer(self, 
                                           Task, 
                                           'task_manager_server_action', 
-                                          self.execute_callback)
+                                          self.execute_callback,
+                                          cancel_callback=self.cancel_callback)
         self.latest_telemetry = None
 
         # Initialize a list to store telemetry data
@@ -47,6 +50,16 @@ class TaskManager(Node):
 
         self.get_logger().info('Task Server Node has been started.')
 
+    def goal_callback(self, goal_request):
+        """Accept or reject a client request to begin an action."""
+        # This server allows multiple goals in parallel
+        self.get_logger().info('Received goal request')
+        return GoalResponse.ACCEPT
+
+    def cancel_callback(self, goal_handle):
+        """Accept or reject a client request to cancel an action."""
+        self.get_logger().info('Received cancel request')
+        return CancelResponse.ACCEPT
     
     # EXECUTION TASKS -----------------
     def execute_callback(self, goal_handle):
@@ -210,7 +223,7 @@ class TaskManager(Node):
         self.get_logger().info(f'Published velocity: {value}')
 
     # TASK COMPUTATION --------------------------------
-    def wait_for_sync_roller_stabilization(self, timeout=30.0, stable_duration=2.0, tolerance=5):
+    def wait_for_sync_roller_stabilization(self, timeout=4.0, stable_duration=2.0, tolerance=5):
         start_time = time.time()
         stable_start_time = None
         last_value = None
@@ -266,13 +279,13 @@ class TaskManager(Node):
         # Step 2: Send closed loop trigger
         self.get_logger().info('Step 2: Setting closed loop mode...')
         
-        if not self.trigger_service_callback(self, self.client_set_closed_loop,'closed_loop'):
+        if not self.trigger_service_callback(self.client_set_closed_loop,'closed_loop'):
             self.get_logger().error('Failed to set closed loop mode')
             return False
         
         # Step 2.5: Send velocity mode trigger
         self.get_logger().info('Step 2.5: Setting velocity mode...')
-        if not self.trigger_service_callback(self, self.client_set_velocity_mode,'velocity_mode'):
+        if not self.trigger_service_callback(self.client_set_velocity_mode,'velocity_mode'):
             self.get_logger().error('Failed to set velocity mode')
             return False
         
@@ -291,9 +304,9 @@ class TaskManager(Node):
             return False
         
         # Step 5: Set brake to false (again)
-        self.get_logger().info('Step 5: Disengaging brake again...')
-        if not self.send_brake_command_callback(False):
-            self.get_logger().error('Failed to disengage brake in step 5')
+        self.get_logger().info('Step 5: engaging brake again...')
+        if not self.send_brake_command_callback(True):
+            self.get_logger().error('Failed to engaging brake in step 5')
             return False
         
         # Step 6: Set velocity to 0
@@ -311,11 +324,19 @@ class TaskManager(Node):
 
     
 def main(args=None):
-    rclpy.init()
-    task_server = TaskManager()
-    rclpy.spin(task_server)
-    task_server.destroy_node()
-    rclpy.shutdown()
+    rclpy.init(args=args)
+    
+    try:
+        minimal_action_server = TaskManager()
+
+        # Use a MultiThreadedExecutor to enable processing goals concurrently
+        executor = MultiThreadedExecutor()
+
+        rclpy.spin(minimal_action_server, executor=executor)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

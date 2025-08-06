@@ -17,7 +17,7 @@ find_package(builtin_interfaces REQUIRED)
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "interfaces/action/Task.action"
-  
+  "interfaces/action/Fibonacci.action"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 
@@ -26,6 +26,10 @@ install(
   PROGRAMS
   cl_task_manager/task_manager.py
   cl_task_manager/task_manager_client.py
+  cl_task_manager/cancel_server.py
+  cl_task_manager/client_cancel.py
+  cl_task_manager/test_server.py
+  cl_task_manager/test_client.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
