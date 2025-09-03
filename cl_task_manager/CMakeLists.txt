@@ -13,12 +13,14 @@ find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(unique_identifier_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
 
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "interfaces/action/Task.action"
   
-  DEPENDENCIES std_msgs builtin_interfaces
+  DEPENDENCIES std_msgs builtin_interfaces unique_identifier_msgs action_msgs
 )
 
 # ─── Install Python Files ────────────────────────────────

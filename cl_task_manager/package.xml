@@ -19,6 +19,8 @@
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
+  <depend>unique_identifier_msgs</depend>
+  <depend>action_msgs</depend>
 
   <!-- Python runtime dependencies -->
   <exec_depend>rclpy</exec_depend>
