@@ -17,6 +17,7 @@ find_package(builtin_interfaces REQUIRED)
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "interfaces/action/Task.action"
+  
   DEPENDENCIES std_msgs builtin_interfaces
 )
 
@@ -29,15 +30,20 @@ install(
   cl_task_manager/client_cancel.py
   cl_task_manager/test_server.py
   cl_task_manager/test_client.py
+  tasks/tasks.py
+  tasks/task_base.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 # ─── Install Launch Files ────────────────────────────────
 install(
-  DIRECTORY launch
+  DIRECTORY launch tasks
   DESTINATION share/${PROJECT_NAME}/
 )
-
+install(
+  DIRECTORY tasks
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
