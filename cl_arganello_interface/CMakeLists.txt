@@ -16,9 +16,10 @@ find_package(builtin_interfaces REQUIRED)
 
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/SetControlMode.srv"
-  "msg/ArganelloRawTelemetry.msg"
-  "msg/ArganelloEnhancedTelemetry.msg"
+  "srv/RopeControlMode.srv"
+  "msg/RopeCommand.msg"
+  "msg/RopeTelemetry.msg"
+  "msg/DebugMessage.msg"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 
@@ -29,6 +30,7 @@ install(
   cl_arganello_interface/arganello_node.py
   cl_arganello_interface/arganello_enhancer_node.py
   cl_arganello_interface/friction_estimator.py
+  cl_arganello_interface/telemetry_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
