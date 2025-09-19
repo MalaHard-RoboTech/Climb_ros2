@@ -3,6 +3,8 @@ int32 task_number
 ---
 # Result
 bool success
+string message
 ---
 # Feedback
 int32 percentage
+string status

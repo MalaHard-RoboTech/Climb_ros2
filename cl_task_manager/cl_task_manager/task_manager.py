@@ -5,18 +5,18 @@ from rclpy.executors import MultiThreadedExecutor, ExternalShutdownException
 from rclpy.action import CancelResponse, GoalResponse
 
 from cl_task_manager.action import Task
-
-from tasks.task_base import BaseTasks
+from tasks.task_homing import HomingTask
 from tasks.tasks import task_0
 
-class TaskManager(BaseTasks):
+class TaskManager(HomingTask):
     def __init__(self):
         super().__init__('task_manager_server')
         self.action_server = self._create_action_server()
         # Dizionario task: ogni callable deve avere signature (goal_handle, feedback_msg) -> Task.Result
         self.tasks = {
             0: lambda gh, fb: task_0(self, gh, fb),  # task di TEST
-            1: self.initialization_task,    # task di Calibration
+            #1: self.initialization_task,    # task di Calibration
+            1: self.homing_task,          # task di Homing
         }
         self.get_logger().info('Task Action Server Node has been started.')
 

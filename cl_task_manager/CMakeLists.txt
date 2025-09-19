@@ -19,7 +19,7 @@ find_package(action_msgs REQUIRED)
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "interfaces/action/Task.action"
-  
+  "interfaces/action/Fibonacci.action"
   DEPENDENCIES std_msgs builtin_interfaces unique_identifier_msgs action_msgs
 )
 
@@ -27,13 +27,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 install(
   PROGRAMS
   cl_task_manager/task_manager.py
-  cl_task_manager/task_manager_client.py
-  cl_task_manager/cancel_server.py
-  cl_task_manager/client_cancel.py
-  cl_task_manager/test_server.py
-  cl_task_manager/test_client.py
   tasks/tasks.py
-  tasks/task_base.py
+  tasks/task_homing.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
