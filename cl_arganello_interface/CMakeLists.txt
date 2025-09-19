@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RopeCommand.msg"
   "msg/RopeTelemetry.msg"
   "msg/DebugMessage.msg"
+  "msg/Imus.msg"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 

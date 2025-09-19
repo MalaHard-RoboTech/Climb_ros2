@@ -11,7 +11,7 @@ from collections import deque
 from typing import Union
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 from std_srvs.srv import Trigger
 from cl_arganello_interface.msg import RopeCommand
 from cl_arganello_interface.msg import DebugMessage
@@ -26,6 +26,10 @@ class TelemetryNode(Node):
       - windowed derivative across k samples
       - outlier hold, brake gating, rope-speed sanity clamp
     """
+
+    
+    
+
 
     def __init__(self):
         super().__init__("telemetry_node")
@@ -155,6 +159,9 @@ class TelemetryNode(Node):
         if self.debug_mode:
             threading.Thread(target=self._stdin_loop, name="stdin", daemon=True).start()
 
+        self.variable_gear_ratio_g: float = 1
+        self.tau_motor: float = float("nan")
+
     # ── Public: enqueue a raw line to MCU ──────────────────────────────────────
     def send_cmd(self, line: str) -> None:
         if line:
@@ -206,11 +213,45 @@ class TelemetryNode(Node):
                 "Unknown motor mode. Use: idle, closed_loop_torque, closed_loop_velocity, closed_loop_position"
             )
 
-    # ── rope_command_callback ─────────────────────────────────────────────────
+    # ── rope_command_callback ────────────────────────────────────────────────
     def _rope_command_cb(self, msg: RopeCommand) -> None:
+        # Log incoming
         self.get_logger().info(
-            f"[command] force={msg.rope_force:.3f}, vel={msg.rope_velocity:.3f}, pos={msg.rope_position:.3f}"
+            f"[command] force={msg.rope_force:.3f} N, vel={msg.rope_velocity:.3f} m/s, pos={msg.rope_position:.3f} m"
         )
+
+        r0 = float(self.sync_roller_radius_m)     # rope radius [m]
+        two_pi = 2.0 * math.pi
+
+        # Use live G if valid; else fall back to 1.0 (warn once)
+        G = float(self.variable_gear_ratio_g)
+        if not (math.isfinite(G) and G > 1e-6):
+            G = 1.0
+            self.get_logger().warn("Gear ratio not valid; using G=1.0 fallback for conversions.")
+
+        # --- Torque (N·m): τm = F * G * r0 ---
+        tau_motor = float(msg.rope_force) * G * r0
+        self.send_cmd(f"send_odrive w axis0.controller.input_torque {tau_motor:.6f}")
+
+        # --- Velocity (turns/s): ωm = (v/r0)/(2π*G) ---
+        if math.isfinite(msg.rope_velocity):
+            motor_vel_turns_s = (float(msg.rope_velocity) / max(r0, 1e-9)) / (two_pi * max(G, 1e-9))
+            self.send_cmd(f"send_odrive w axis0.controller.input_vel {motor_vel_turns_s:.6f}")
+
+        # --- Position (turns): θm = (x/r0)/(2π*G) ---
+        if math.isfinite(msg.rope_position):
+            motor_pos_turns = (float(msg.rope_position) / max(r0, 1e-9)) / (two_pi * max(G, 1e-9))
+            self.send_cmd(f"send_odrive w axis0.controller.input_pos {motor_pos_turns:.6f}")
+
+        self.get_logger().info(
+            f"→ sent: τ={tau_motor:.3f} N·m, "
+            f"vel={locals().get('motor_vel_turns_s', float('nan')):.3f} trn/s, "
+            f"pos={locals().get('motor_pos_turns', float('nan')):.3f} trn (G={G:.3f}, r0={r0:.4f} m)"
+        )
+
+    
+   
+
 
     # ── Reader/Writer loops ───────────────────────────────────────────────────
     def _serial_reader_loop(self) -> None:
@@ -481,6 +522,7 @@ class TelemetryNode(Node):
         self.brake_status = bool(brake_status)
         self.current = current
         self.motor_torque = motor_torque
+        self.tau_motor = self.motor_torque
         self.syncronous_roller_raw_wrapped = sync_raw
         self.motor_position = motor_pos_norm
 
@@ -517,6 +559,16 @@ class TelemetryNode(Node):
         m.rope_speed_m_s = to_f(rope_speed_m_s)
 
         self.pub_debug.publish(m)
+
+
+        # --- Variable gear ratio G = w_roller / w_motor (dimensionless) ---
+        motor_eps = 1e-6  # rev/s
+        if abs(self.motor_speed) > motor_eps:
+            G_new = float(self.sync_roller_speed / self.motor_speed)
+            if math.isfinite(G_new):
+                self.variable_gear_ratio_g = max(0.01, min(200.0, G_new))
+        # else: keep previous self.variable_gear_ratio_g
+
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _load_config(self, path: str) -> Optional[dict]:
@@ -745,12 +797,7 @@ if __name__ == "__main__":
 '''
 readme content as follows 
 
-ros2 run cl_arganello_interface telemetry_node.py \
-  --ros-args \
-  -p side:=left \
-  -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 \
-  -p config_path:=/home/msi/Desktop/ros2_ws/src/cl_arganello_interface/config/arganelloTelemetry.json \
-  -p debug_mode:=true
+ros2 run cl_arganello_interface telemetry_node.py --ros-args -p side:=left -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 -p config_path:=/home/msi/Desktop/ros2_ws/src/cl_arganello_interface/config/arganelloTelemetry.json -p debug_mode:=true
 
 ros2 service call /winch/left/brake_engage std_srvs/srv/Trigger "{}"
 ros2 service call /winch/left/brake_disengage std_srvs/srv/Trigger "{}"

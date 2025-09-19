@@ -1,112 +1,191 @@
 #!/usr/bin/env python3
+"""
+dongle_node.py — simple ROS 2 node that bridges USB serial to topics.
+
+Params:
+  serial_port (string, default /dev/ttyUSB0)
+  baud        (int,    default 115200)
+  poll_rate   (float,  default 200.0 Hz)
+
+Subs (Float32):
+  alpine/dongle/motorSpeed  -> send "m<val>"
+  alpine/dongle/servoValve1 -> send "s1 <deg>"
+  alpine/dongle/servoValve2 -> send "s2 <deg>"
+
+Pubs:
+  alpine/dongle/telemetry/raw   (std_msgs/String): raw CSV lines (complete, de-chunked)
+  alpine/dongle/telemetry       (std_msgs/Float32MultiArray): [epoch_ms, imu1[11], imu2[11]]
+
+
+Usage: 
+ros2 topic pub -1 /alpine/dongle/motorSpeed std_msgs/msg/Float32 "{data: 0.3}"
+ros2 topic pub -1 /alpine/dongle/servoValve1 std_msgs/msg/Float32 "{data: 45.0}"
+ros2 topic pub -1 /alpine/dongle/servoValve2 std_msgs/msg/Float32 "{data: 30.0}"
+
+
+"""
+
+import re
+from typing import List, Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Int32, String
-import serial
-import threading
-import re
+from rclpy.qos import QoSProfile
 
-SERIAL_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047301-if00"
-BAUDRATE = 115200
+from std_msgs.msg import String, Float32, Float32MultiArray, MultiArrayLayout, MultiArrayDimension
+
+import serial
+
+_RX_PREFIX = re.compile(r'^\[RX [0-9A-Fa-f:]{17}\]\s*')
+
+def _strip_prefix(line: str) -> str:
+    return _RX_PREFIX.sub('', line).strip()
+
+def _split_flex_csv(s: str) -> List[str]:
+    s = s.replace('\t', ',')
+    s = re.sub(r'[ ,]+', ',', s.strip())
+    if s.endswith(','):
+        s = s[:-1]
+    return [p for p in s.split(',') if p != '']
+
+def _parse_dual_imu(line: str) -> Optional[Tuple[int, List[float], List[float]]]:
+    # Expect: epoch_ms,<11 imu1>,<11 imu2>
+    core = _strip_prefix(line)
+    parts = _split_flex_csv(core)
+    if len(parts) < 23:
+        return None
+    try:
+        epoch_ms = int(float(parts[0]))
+        vals = [float(x) for x in parts[1:]]
+    except Exception:
+        return None
+    if len(vals) < 22:
+        return None
+    imu1 = vals[0:11]
+    imu2 = vals[11:22]
+    return epoch_ms, imu1, imu2
 
 class DongleNode(Node):
     def __init__(self):
         super().__init__('dongle_node')
 
-        # Serial init
-        try:
-            self.ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=0.1)
-            self.get_logger().info(f"✅ Serial port opened: {SERIAL_PORT}")
-        except Exception as e:
-            self.get_logger().error(f"❌ Failed to open serial: {e}")
-            raise
+        # Params
+        self.declare_parameter('serial_port', '/dev/ttyUSB0')
+        self.declare_parameter('baud', 1000000)
+        self.declare_parameter('poll_rate', 200.0)
 
-        # Internal state
-        self.lock = threading.Lock()
-        self.cmd = {'sx': {}, 'dx': {}}
-        self.manual_cmd = {'sx': [], 'dx': []}
+        self.serial_port = self.get_parameter('serial_port').get_parameter_value().string_value
+        self.baud = int(self.get_parameter('baud').value)
+        self.poll_rate = float(self.get_parameter('poll_rate').value)
+        self.period = max(0.001, 1.0 / self.poll_rate)
 
         # Publishers
-        self.pub = {
-            'sx': self.create_publisher(Int32, 'arganello/sx/encoderCounts', 10),
-            'dx': self.create_publisher(Int32, 'arganello/dx/encoderCounts', 10),
-        }
+        qos = QoSProfile(depth=100)
+        self.pub_raw = self.create_publisher(String, 'alpine/dongle/telemetry/raw', qos)
+        self.pub_parsed = self.create_publisher(Float32MultiArray, 'alpine/dongle/telemetry', qos)
 
-        # Subscribers for command values
-        for side in ['sx', 'dx']:
-            for cmd_type in ['position', 'velocity', 'torque']:
-                topic = f'arganello/{side}/{cmd_type}'
-                self.create_subscription(Float32, topic, self.make_cmd_callback(side, cmd_type), 10)
+        # Subscribers -> send commands to dongle
+        self.create_subscription(Float32, 'alpine/dongle/motorSpeed', self._cb_motor, qos)
+        self.create_subscription(Float32, 'alpine/dongle/servoValve1', self._cb_s1, qos)
+        self.create_subscription(Float32, 'alpine/dongle/servoValve2', self._cb_s2, qos)
 
-            # Subscribers for raw string commands
-            self.create_subscription(String, f'arganello/{side}/command', self.make_injection_callback(side), 10)
+        # Serial (buffered, non-blocking reads)
+        self.ser = None
+        self._buf = bytearray()
+        self._open_serial()
 
-        # Serial loop thread
-        self.thread = threading.Thread(target=self.serial_loop, daemon=True)
-        self.thread.start()
+        # Polling timer
+        self.timer = self.create_timer(self.period, self._poll_serial)
 
-    def make_cmd_callback(self, side, cmd_type):
-        def callback(msg):
-            with self.lock:
-                self.cmd[side][cmd_type] = msg.data
-            self.get_logger().info(f"📥 {side} → {cmd_type}: {msg.data}")
-        return callback
+        self.get_logger().info(
+            f"dongle_node: port={self.serial_port} baud={self.baud} poll_rate={self.poll_rate} Hz"
+        )
 
-    def make_injection_callback(self, side):
-        def callback(msg):
-            with self.lock:
-                self.manual_cmd[side].append(msg.data)
-            self.get_logger().info(f"🧪 Injected to {side}: '{msg.data}'")
-        return callback
+    # --- Serial helpers -----------------------------------------------------
+    def _open_serial(self):
+        try:
+            # small timeout so .read() returns quickly but allows aggregation
+            self.ser = serial.Serial(self.serial_port, self.baud, timeout=0.01)
+            self.get_logger().info(f"Opened serial: {self.serial_port} @ {self.baud}")
+        except Exception as e:
+            self.get_logger().error(f"Serial open failed: {e}")
+            self.ser = None
 
-    def get_next_command(self, side):
-        with self.lock:
-            if self.manual_cmd[side]:
-                return self.manual_cmd[side].pop(0)
-            for key in ['torque', 'velocity', 'position']:
-                if key in self.cmd[side]:
-                    value = self.cmd[side].pop(key)
-                    return f"{side}:{key}:{value}"
-        return f"{side}:torque:0.0"
+    def _send_line(self, text: str):
+        if not text.endswith('\n'):
+            text += '\n'
+        try:
+            if self.ser is not None and self.ser.is_open:
+                self.ser.write(text.encode('utf-8', errors='ignore'))
+        except Exception as e:
+            self.get_logger().warn(f"Serial write error: {e}")
 
-    def serial_loop(self):
-        sides = ['sx', 'dx']
-        index = 0
-        while rclpy.ok():
-            side = sides[index]
+    # --- Subscribers --------------------------------------------------------
+    def _cb_motor(self, msg: Float32):
+        self._send_line(f"m{float(msg.data):.6f}")
+
+    def _cb_s1(self, msg: Float32):
+        self._send_line(f"s1 {float(msg.data):.3f}")
+
+    def _cb_s2(self, msg: Float32):
+        self._send_line(f"s2 {float(msg.data):.3f}")
+
+    # --- Poll serial (buffered) --------------------------------------------
+    def _poll_serial(self):
+        if self.ser is None or not self.ser.is_open:
+            self._open_serial()
+            return
+
+        try:
+            # read any available bytes (chunked)
+            chunk = self.ser.read(1024)
+            if chunk:
+                self._buf.extend(chunk)
+
+            # extract complete lines ending with '\n'
+            while True:
+                nl = self._buf.find(b'\n')
+                if nl < 0:
+                    break
+                line_bytes = self._buf[:nl+1]
+                del self._buf[:nl+1]
+                line = line_bytes.decode(errors='ignore').strip()
+                if not line:
+                    continue
+
+                # publish raw complete line
+                self.pub_raw.publish(String(data=line))
+
+                # parse & publish structured
+                parsed = _parse_dual_imu(line)
+                if parsed is not None:
+                    epoch_ms, imu1, imu2 = parsed
+                    data = [float(epoch_ms)] + (imu1 + [0.0]*11)[:11] + (imu2 + [0.0]*11)[:11]
+                    layout = MultiArrayLayout(
+                        dim=[MultiArrayDimension(label='fields', size=len(data), stride=len(data))],
+                        data_offset=0
+                    )
+                    self.pub_parsed.publish(Float32MultiArray(layout=layout, data=data))
+
+        except Exception as e:
+            self.get_logger().warn(f"Serial read error: {e}")
             try:
-                cmd = self.get_next_command(side)
-                self.ser.write((cmd + '\n').encode())
-                self.get_logger().debug(f"📤 Sent to {side}: {cmd}")
-                line = self.ser.readline().decode().strip()
-                if line:
-                    self.handle_serial_response(line)
-            except Exception as e:
-                self.get_logger().error(f"❌ Serial error: {e}")
-            index = (index + 1) % 2
+                if self.ser:
+                    self.ser.close()
+            except Exception:
+                pass
+            self.ser = None  # retry next tick
 
-    def handle_serial_response(self, line):
-        match = re.search(r"Arganello (SX|DX): ENC: (-?\d+)", line)
-        if match:
-            side = match.group(1).lower()
-            count = int(match.group(2))
-            self.pub[side].publish(Int32(data=count))
-            self.get_logger().info(f"🧮 {side}/encoderCounts: {count}")
-        else:
-            self.get_logger().debug(f"💬 Ignored line: {line}")
-
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    rclpy.init()
     node = DongleNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("🛑 Shutting down.")
+        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
