@@ -9,13 +9,13 @@ This document provides an updated list of **all available features and commands*
 ### Start node for **sx**:
 
 ```bash
-ros2 run cl_arganello_interface arganello_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 -p arganello_id:=sx -p pool_rate:=200.0
+ros2 run cl_arganello_interface telemetry_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 -p arganello_id:=sx -p pool_rate:=200.0
 ```
 
 ### Start node for **dx**:
 
 ```bash
-ros2 run cl_arganello_interface arganello_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970046081-if00 -p arganello_id:=dx -p pool_rate:=200.0
+ros2 run cl_arganello_interface telemetry_node.py --ros-args -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970046081-if00 -p arganello_id:=dx -p pool_rate:=200.0
 ```
 
 ---
