@@ -15,6 +15,8 @@ from std_msgs.msg import String, Float32
 from std_srvs.srv import Trigger
 from cl_arganello_interface.msg import RopeCommand
 from cl_arganello_interface.msg import DebugMessage
+from cl_arganello_interface.msg import RopeTelemetry
+
 
 
 class TelemetryNode(Node):
@@ -26,9 +28,6 @@ class TelemetryNode(Node):
       - windowed derivative across k samples
       - outlier hold, brake gating, rope-speed sanity clamp
     """
-
-    
-    
 
 
     def __init__(self):
@@ -55,7 +54,7 @@ class TelemetryNode(Node):
         self.declare_parameter("append_pc_time_ns", False)
 
         # Geometry/config (override at launch if needed)
-        self.declare_parameter("sync_roller_radius_m", 0.0025)  # meters (← set your real radius)
+        self.declare_parameter("sync_roller_radius_m", 0.025)  # meters (← set your real radius)
         self.declare_parameter("sync_roller_cpr", 2400)
 
         # Limits & filters (override at launch if needed)
@@ -66,6 +65,8 @@ class TelemetryNode(Node):
         self.declare_parameter("lpf_fc_pos_roller", 5.0)    # Hz, on roller counts
         self.declare_parameter("brake_zero_rps", 0.2)       # ~12 rpm threshold
         self.declare_parameter("phys_max_rope_m_s", 5.0)
+        self.declare_parameter("rope_diameter_m", 0.005)   # 5 mm by request
+
 
         # ── Read params ────────────────────────────────────────────────────────
         self.port = self.get_parameter("serial_port").value
@@ -95,6 +96,9 @@ class TelemetryNode(Node):
         self.lpf_fc_pos_roller = float(self.get_parameter("lpf_fc_pos_roller").value)
         self.brake_zero_rps = float(self.get_parameter("brake_zero_rps").value)
         self.phys_max_rope_m_s = float(self.get_parameter("phys_max_rope_m_s").value)
+        self.rope_diameter_m = float(self.get_parameter("rope_diameter_m").value)
+        
+
 
         # ── Serial ─────────────────────────────────────────────────────────────
         try:
@@ -108,6 +112,9 @@ class TelemetryNode(Node):
         # --- Sticky “last valid” holders (init before threads start)
         self._last_valid_motor_pos_norm: float | None = None
 
+        self._motor_rev_zero = None
+
+
 
         # ── Pubs/Subs/Services (namespaced by side) ───────────────────────────
         base = f"/winch/{self.side}"
@@ -120,6 +127,12 @@ class TelemetryNode(Node):
         self.create_service(Trigger, f"{base}/brake_engage", self._srv_brake_engage)
         self.create_service(Trigger, f"{base}/brake_disengage", self._srv_brake_disengage)
         self.create_service(Trigger, f"{base}/sync_now", self._srv_sync_now)
+        self.create_service(Trigger, f"{base}/rope_zero", self._srv_rope_zero)
+
+
+        self.pub_rope = self.create_publisher(RopeTelemetry, f"{base}/telemetry", 10)
+
+
 
         # ── TX queue & CSV header tracking ────────────────────────────────────
         self.tx_queue: deque[str] = deque()
@@ -159,8 +172,13 @@ class TelemetryNode(Node):
         if self.debug_mode:
             threading.Thread(target=self._stdin_loop, name="stdin", daemon=True).start()
 
-        self.variable_gear_ratio_g: float = 1
+        self.variable_gear_ratio_g: float = 2.31 #60 / 26 mm for testing fixed
+        self._freeze_g = True
         self.tau_motor: float = float("nan")
+        # Rope-length zero reference (first valid sample → 0 m)
+        self._roller_counts_zero: Optional[float] = None
+        self.rope_length_m: float = 0.0
+
 
     # ── Public: enqueue a raw line to MCU ──────────────────────────────────────
     def send_cmd(self, line: str) -> None:
@@ -183,6 +201,36 @@ class TelemetryNode(Node):
         res.success = True
         res.message = "sent: set_brake 0"
         return res
+    
+    def _srv_rope_zero(self, req, res):
+        """
+        Zero rope length using the current filtered roller counts.
+        Also aligns the motor reference so rope_position=0 maps to 'now'.
+        """
+        if getattr(self, "_pos_roller_filt", None) is None:
+            res.success = False
+            res.message = "No roller data yet; cannot zero."
+            return res
+
+        # 1) Zero rope length
+        self._roller_counts_zero = float(self._pos_roller_filt)
+        self.rope_length_m = 0.0
+
+        # 2) Align motor reference for absolute rope position commands
+        motor_now = getattr(self, "_pos_motor_filt", None)
+        if motor_now is None:
+            motor_now = getattr(self, "_motor_unwrapped_rev", None)
+        if motor_now is not None:
+            self._motor_rev_zero = float(motor_now)
+
+        res.success = True
+        res.message = "Rope zeroed (and motor reference aligned)."
+        self.get_logger().info(
+            f"✔ Rope zeroed: rope_length_m=0.0; motor_ref={getattr(self, '_motor_rev_zero', float('nan'))}"
+        )
+        return res
+
+
 
     # New: manual sync service
     def _srv_sync_now(self, req, res):
@@ -215,42 +263,54 @@ class TelemetryNode(Node):
 
     # ── rope_command_callback ────────────────────────────────────────────────
     def _rope_command_cb(self, msg: RopeCommand) -> None:
-        # Log incoming
+        # Log incoming rope-space request
         self.get_logger().info(
             f"[command] force={msg.rope_force:.3f} N, vel={msg.rope_velocity:.3f} m/s, pos={msg.rope_position:.3f} m"
         )
 
-        r0 = float(self.sync_roller_radius_m)     # rope radius [m]
+        # Geometry
+        r0 = float(self.sync_roller_radius_m)
+        d  = float(self.rope_diameter_m)
+        r_eff = r0 + 0.5 * d
         two_pi = 2.0 * math.pi
 
-        # Use live G if valid; else fall back to 1.0 (warn once)
+        # Live gear ratio (frozen/smoothed elsewhere if you enable it)
         G = float(self.variable_gear_ratio_g)
         if not (math.isfinite(G) and G > 1e-6):
             G = 1.0
             self.get_logger().warn("Gear ratio not valid; using G=1.0 fallback for conversions.")
 
-        # --- Torque (N·m): τm = F * G * r0 ---
-        tau_motor = float(msg.rope_force) * G * r0
-        self.send_cmd(f"send_odrive w axis0.controller.input_torque {tau_motor:.6f}")
+        # --- Torque (N·m): τm = F * G * r_eff ---
+        if math.isfinite(msg.rope_force):
+            tau_motor = float(msg.rope_force) * G * r_eff
+            self.send_cmd(f"send_odrive w axis0.controller.input_torque {tau_motor:.6f}")
+        else:
+            tau_motor = float("nan")
 
-        # --- Velocity (turns/s): ωm = (v/r0)/(2π*G) ---
+        # --- Velocity (turns/s): ωm = (v / r_eff) / (2π * G) ---
         if math.isfinite(msg.rope_velocity):
-            motor_vel_turns_s = (float(msg.rope_velocity) / max(r0, 1e-9)) / (two_pi * max(G, 1e-9))
+            motor_vel_turns_s = (float(msg.rope_velocity) / max(r_eff, 1e-9)) / (two_pi * max(G, 1e-9))
             self.send_cmd(f"send_odrive w axis0.controller.input_vel {motor_vel_turns_s:.6f}")
+        else:
+            motor_vel_turns_s = float("nan")
 
-        # --- Position (turns): θm = (x/r0)/(2π*G) ---
+        # --- Position (turns, ABSOLUTE): θm_abs = θm_zero + (x / r_eff) / (2π * G) ---
         if math.isfinite(msg.rope_position):
-            motor_pos_turns = (float(msg.rope_position) / max(r0, 1e-9)) / (two_pi * max(G, 1e-9))
-            self.send_cmd(f"send_odrive w axis0.controller.input_pos {motor_pos_turns:.6f}")
+            base_turns = float(self._motor_rev_zero) if getattr(self, "_motor_rev_zero", None) is not None else 0.0
+            delta_turns = (float(msg.rope_position) / max(r_eff, 1e-9)) / (two_pi * max(G, 1e-9))
+            motor_pos_turns_abs = base_turns + delta_turns
+            self.send_cmd(f"send_odrive w axis0.controller.input_pos {motor_pos_turns_abs:.6f}")
+        else:
+            motor_pos_turns_abs = float("nan")
 
         self.get_logger().info(
-            f"→ sent: τ={tau_motor:.3f} N·m, "
-            f"vel={locals().get('motor_vel_turns_s', float('nan')):.3f} trn/s, "
-            f"pos={locals().get('motor_pos_turns', float('nan')):.3f} trn (G={G:.3f}, r0={r0:.4f} m)"
+            f"→ mapped: τ={tau_motor if math.isfinite(tau_motor) else float('nan'):.3f} N·m, "
+            f"vel={motor_vel_turns_s if math.isfinite(motor_vel_turns_s) else float('nan'):.3f} trn/s, "
+            f"pos_abs={motor_pos_turns_abs if math.isfinite(motor_pos_turns_abs) else float('nan'):.3f} trn "
+            f"(G={G:.3f}, r_eff={r_eff:.4f} m, θ0={getattr(self, '_motor_rev_zero', float('nan'))})"
         )
 
     
-   
 
 
     # ── Reader/Writer loops ───────────────────────────────────────────────────
@@ -420,6 +480,10 @@ class TelemetryNode(Node):
         phys_max_rope_m_s = self.phys_max_rope_m_s
         tau2pi = 2.0 * math.pi
 
+        # Effective rope radius: r_eff = r0 + d/2
+        rope_diameter_m = float(self.rope_diameter_m)
+        r_eff = radius_m + 0.5 * rope_diameter_m
+
         # helper: 1st-order LPF on positions
         def lpf_pos(prev_val: Optional[float], x: Optional[float], dt: float, fc: float) -> Optional[float]:
             if x is None:
@@ -526,9 +590,9 @@ class TelemetryNode(Node):
         self.syncronous_roller_raw_wrapped = sync_raw
         self.motor_position = motor_pos_norm
 
-        motor_speed_rad_s = self.motor_speed * tau2pi
+        motor_speed_rad_s  = self.motor_speed * tau2pi
         roller_speed_rad_s = self.sync_roller_speed * tau2pi
-        rope_speed_m_s = roller_speed_rad_s * radius_m
+        rope_speed_m_s     = roller_speed_rad_s * r_eff   # <-- use r_eff
 
         # final rope sanity (and hold)
         if abs(rope_speed_m_s) > phys_max_rope_m_s:
@@ -560,14 +624,46 @@ class TelemetryNode(Node):
 
         self.pub_debug.publish(m)
 
-
         # --- Variable gear ratio G = w_roller / w_motor (dimensionless) ---
         motor_eps = 1e-6  # rev/s
-        if abs(self.motor_speed) > motor_eps:
+        if not getattr(self, "_freeze_g", False) and abs(self.motor_speed) > motor_eps:
             G_new = float(self.sync_roller_speed / self.motor_speed)
             if math.isfinite(G_new):
                 self.variable_gear_ratio_g = max(0.01, min(200.0, G_new))
         # else: keep previous self.variable_gear_ratio_g
+
+        # --- Rope length (m) from filtered roller counts (use r_eff) ---
+        if getattr(self, "_pos_roller_filt", None) is not None:
+            zero = getattr(self, "_roller_counts_zero", None)
+            if zero is None:
+                self._roller_counts_zero = float(self._pos_roller_filt)
+                zero = self._roller_counts_zero
+            counts_rel = (self._pos_roller_filt - zero)
+            rope_length_m = (counts_rel / cpr) * tau2pi * r_eff
+            self.rope_length_m = float(rope_length_m)
+        else:
+            rope_length_m = getattr(self, "rope_length_m", 0.0)
+
+
+        # --- Rope force (N): F = τm / (G * r_eff) ---
+        G = float(self.variable_gear_ratio_g) if math.isfinite(self.variable_gear_ratio_g) else 1.0
+        den = max(r_eff * max(G, 1e-9), 1e-9)                # <-- use r_eff
+        rope_force = float("nan")
+        if self.tau_motor is not None and math.isfinite(self.tau_motor):
+            rope_force = float(self.tau_motor) / den
+
+        # --- Publish RopeTelemetry ---
+        rt = RopeTelemetry()
+        rt.header.stamp = self.get_clock().now().to_msg()   # no frame_id set
+        rt.rope_force    = to_f(rope_force)
+        rt.rope_length   = to_f(rope_length_m)
+        rt.rope_velocity = to_f(rope_speed_m_s)
+        rt.current       = to_f(self.current) if self.current is not None else float("nan")
+        rt.brake_status  = bool(self.brake_status)
+        self.pub_rope.publish(rt)
+
+
+
 
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -794,28 +890,12 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+
 '''
-readme content as follows 
 
-ros2 run cl_arganello_interface telemetry_node.py --ros-args -p side:=left -p serial_port:=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5970047399-if00 -p config_path:=/home/msi/Desktop/ros2_ws/src/cl_arganello_interface/config/arganelloTelemetry.json -p debug_mode:=true
-
-ros2 service call /winch/left/brake_engage std_srvs/srv/Trigger "{}"
-ros2 service call /winch/left/brake_disengage std_srvs/srv/Trigger "{}"
-
-# IDLE
-ros2 topic pub --once /winch/left/set_motor_mode std_msgs/msg/String "{data: 'idle'}"
-# CLOSED-LOOP TORQUE
-ros2 topic pub --once /winch/left/set_motor_mode std_msgs/msg/String "{data: 'closed_loop_torque'}"
-# CLOSED-LOOP VELOCITY
-ros2 topic pub --once /winch/left/set_motor_mode std_msgs/msg/String "{data: 'closed_loop_velocity'}"
-# CLOSED-LOOP POSITION
-ros2 topic pub --once /winch/left/set_motor_mode std_msgs/msg/String "{data: 'closed_loop_position'}"
-
-
-
-
-
-
+ros2 service call /winch/left/rope_zero std_srvs/srv/Trigger "{}"
 
 
 '''

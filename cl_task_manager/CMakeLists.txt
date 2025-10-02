@@ -19,7 +19,6 @@ find_package(action_msgs REQUIRED)
 # ─── Custom Interfaces ───────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "interfaces/action/Task.action"
-  "interfaces/action/Fibonacci.action"
   DEPENDENCIES std_msgs builtin_interfaces unique_identifier_msgs action_msgs
 )
 

@@ -27,11 +27,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 # ─── Install Python Files ────────────────────────────────
 install(
   PROGRAMS
-  cl_arganello_interface/dongle_node.py
-  cl_arganello_interface/arganello_node.py
-  cl_arganello_interface/arganello_enhancer_node.py
-  cl_arganello_interface/friction_estimator.py
-  cl_arganello_interface/telemetry_node.py
+    cl_arganello_interface/dongle_node.py
+    cl_arganello_interface/friction_estimator.py
+    cl_arganello_interface/telemetry_node.py
+    cl_arganello_interface/jump.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

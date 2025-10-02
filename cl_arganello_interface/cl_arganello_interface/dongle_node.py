@@ -71,7 +71,7 @@ class DongleNode(Node):
 
         # Params
         self.declare_parameter('serial_port', '/dev/ttyUSB0')
-        self.declare_parameter('baud', 1000000)
+        self.declare_parameter('baud', 115200)
         self.declare_parameter('poll_rate', 200.0)
 
         self.serial_port = self.get_parameter('serial_port').get_parameter_value().string_value
