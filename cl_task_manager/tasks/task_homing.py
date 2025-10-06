@@ -54,7 +54,7 @@ class HomingTask(Node):
 
     def telemetry_callback(self, msg):
         self.latest_telemetry = msg
-        self.get_logger().info(f'Received telemetry: {msg}')
+        #self.get_logger().info(f'Received telemetry: {msg}')
 
     def send_brake_command_callback(self, engage_brake):
         client = self.client_left_brake_engage if engage_brake else self.client_left_brake_disengage
@@ -134,15 +134,43 @@ class HomingTask(Node):
         """Wait for current to reach peak indicating rope tension"""
         start_time = time.time()
         
-        while time.time() - start_time < timeout:
-            if self.latest_telemetry and abs(self.latest_telemetry.current) > threshold:
-                self.get_logger().info(f'Peak current detected: {self.latest_telemetry.current}A')
-                return True
-            time.sleep(0.1)
+        self.get_logger().info(f'Waiting for current peak above {threshold}A within {timeout}s')
         
-        self.get_logger().warning(f'Peak current not reached within {timeout}s')
+        while time.time() - start_time < timeout:
+            if self.latest_telemetry is not None:
+                current_value = abs(self.latest_telemetry.current)
+                self.get_logger().debug(f'Current reading: {current_value}A (threshold: {threshold}A)')
+                
+                if current_value >= threshold:
+                    self.get_logger().info(f'Peak current detected: {current_value}A (threshold: {threshold}A)')
+                    return True
+            
+            # Check every 50ms for more responsive detection
+            time.sleep(0.05)
+        
+        self.get_logger().warning(f'Peak current not reached within {timeout}s timeout')
         return False
 
+    def wait_for_stop_movement(self, velocity_threshold=0.01, timeout=5.0):
+        """Wait until the rope velocity is below a certain threshold"""
+        start_time = time.time()
+        
+        self.get_logger().info(f'Waiting for rope to stop (velocity < {velocity_threshold} m/s) within {timeout}s')
+        
+        while time.time() - start_time < timeout:
+            if self.latest_telemetry is not None:
+                velocity_value = abs(self.latest_telemetry.rope_velocity)
+                self.get_logger().debug(f'Rope velocity reading: {velocity_value} m/s (threshold: {velocity_threshold} m/s)')
+                
+                if velocity_value <= velocity_threshold:
+                    self.get_logger().info(f'Rope has stopped moving: {velocity_value} m/s (threshold: {velocity_threshold} m/s)')
+                    return True
+            
+            # Check every 50ms for more responsive detection
+            time.sleep(0.05)
+        
+        self.get_logger().warning(f'Rope did not stop within {timeout}s timeout')
+        return False
     # ======= TASKS =======
     def homing_task(self, goal_handle, feedback_msg):
         """
@@ -196,16 +224,20 @@ class HomingTask(Node):
                 result.success = False
                 result.message = 'Failed to send rope command'
                 return result
-            
+            time.sleep(0.5) 
             # Step 4: Wait for peak current
-            self.get_logger().info('Step 4: Waiting for peak current')
+            self.get_logger().info('Step 4: Waiting for no movement')
             feedback_msg.status = 'Waiting for rope tension'
             feedback_msg.percentage = 55
             goal_handle.publish_feedback(feedback_msg)
             
-            if not self.wait_for_peak_current(threshold=1.5, timeout=2.0):
+            # if not self.wait_for_peak_current(threshold=1, timeout=2.0):
+            #     result.success = False
+            #     result.message = 'Peak current not detected'
+            #     return result
+            if not self.wait_for_stop_movement(velocity_threshold=0.01, timeout=2.0):
                 result.success = False
-                result.message = 'Peak current not detected'
+                result.message = 'Rope did not stop moving'
                 return result
             
             # Step 5: Engage brake again
@@ -219,7 +251,7 @@ class HomingTask(Node):
                 result.message = 'Failed to engage brake'
                 return result
             
-            time.sleep(20.0)  # Wait for brake to engage
+            time.sleep(10.0)  # Wait for brake to engage
             
             #Step 6: Send zero command
             self.get_logger().info('Step 6: Sending zero rope command')
