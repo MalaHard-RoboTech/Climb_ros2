@@ -16,6 +16,8 @@ services:
       - ./:/ros2_ws/src
       - /tmp/.X11-unix:/tmp/.X11-unix
       - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+      - /usr/local/MATLAB/R2024b:/usr/local/MATLAB/R2024b
+
     environment:
       - DISPLAY=${DISPLAY}
       - LIBGL_ALWAYS_INDIRECT=0

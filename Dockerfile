@@ -25,18 +25,24 @@ RUN apt-get update && apt-get install -y \
     ros-humble-xacro \
     ros-humble-gazebo-ros-pkgs \
     ros-humble-gazebo-ros2-control \
+    ros-humble-rosidl-default-generators \
+    ros-humble-rosidl-default-runtime \
+    ros-humble-ament-lint-auto \
+    ros-humble-ament-lint-common \
     libxcb-xinerama0 \  
     python3-markdown \
     doxygen \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
-RUN pip3 install pyzmq cbor2 \
+RUN pip3 install \
+    pyzmq \
+    cbor2 \
     pyserial \
     flask \
     flask-ask-sdk \
     ask-sdk \
-    notebook \ 
+    notebook \
     pyyaml \
     xmlschema
 # ROS workspace
