@@ -43,7 +43,7 @@ def generate_launch_description():
             parameters=[{
                 'serial_port': '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5A7A010904-if00',
                 'baud': 1000000,
-                'poll_rate': 200.0
+                'poll_rate': 100.0
             }]
         ),
         
